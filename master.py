@@ -5,8 +5,9 @@ import requests
 import pandas as pd
 import twitter   # This is @bear's Python-Twitter wrapper: https://github.com/bear/python-twitter
 from twitter import models
+import facebook  # This is @mobolic's Facebook-SDK wrapper: https://github.com/mobolic/facebook-sdk
 
-import settings  # Be sure to add your Twitter API consumer key/secret to settings.py or this won't work
+import settings  # Be sure to add your platform API consumer keys/secrets to settings.py or this won't work
 
 # fetch all social media records from USDR API
 def fetchUSDR():
@@ -43,10 +44,11 @@ def loadUSDR():
     
     return df
 
-def check_missing_screen_name(service_key, service_url):
-    if service_key not in service_url:
-        return "service_key does not match service_url"
-    else: return "missing screen name (check service_url for errors)"
+def check_missing_screen_name(service_key_list, service_url):
+    for service_key in service_key_list:
+        if service_key in service_url:
+            return "missing screen name (check service_url for errors)"
+    return "service_key does not match service_url"
 
 # since not all entries have usernames filled in, parse a Twitter URL for screen name and convert to lower case
 def getTwitterUsername(url):
@@ -115,7 +117,7 @@ def getLastTweet(tweet_obj):
     except TypeError:
         return float('NaN')
 
-def lastTweetedCategory(datetime_obj):
+def lastPostedCategory(datetime_obj):
     diff = pd.datetime.now() - datetime_obj
     if diff < pd.Timedelta('24 hours'):
         return 'within last 24 hours'
@@ -128,6 +130,164 @@ def lastTweetedCategory(datetime_obj):
     else:
         return 'more than a year ago'
 
+# since not all entries have usernames filled in, parse a Twitter URL for screen name and convert to lower case
+def getFacebookUsername(url):
+    regex = r"(?:https?:\/\/)?(?:www\.)?[fF]acebook\.com\/(?:.+\/)*([\w\.\-]+)"  # thanks to @marcgg and @nkanaev on GitHub thread: https://gist.github.com/marcgg/733592
+    try:
+        username = str(re.search(regex, url).group(1))
+        return username.lower()
+    except AttributeError:
+        return float('NaN')
+
+def fetchFacebook(url_list):
+    df_urls = fetchFacebookURLs(url_list)
+    
+#==============================================================================NOT WORKING
+#     notfound = df_urls[df_urls['name'].isnull()]
+#     new_urls = []
+#     with requests.Session() as s:
+#         for old_url in notfound.index.values:
+#             resp = s.head(old_url, allow_redirects=True)
+#             new_urls.append(resp.url)
+#             
+#     df_urls = pd.concat([df_urls, fetchFacebookURLs(new_urls)], ignore_index=True)
+#==============================================================================
+    
+    # save results to a json txt file for later reference
+    with open('data/Facebook_API_Results_by_URL.txt', 'w+') as file:
+        json.dump(df_urls.to_json(), file)
+        
+    id_list = df_urls['id'].tolist()
+    
+#==============================================================================NOT WORKING
+#     df_ids = fetchFacebookDetails(id_list)  ## NOT WORKING
+#     
+#     # save results to a json txt file for later reference
+#     with open('data/Facebook_API_Results_by_ID.txt', 'w+') as file:
+#         json.dump(df_ids.to_json(), file)
+#     
+#     df_merged = pd.merge(df_urls, df_ids, how='outer', on='id', left_index=False, right_index=False, sort=True, suffixes=('_url', '_id'), copy=False, indicator=False)
+#==============================================================================
+    
+    df_merged = df_urls
+
+    return df_merged
+
+def fetchFacebookDetails(id_list):
+    # remove empty strings and de-dupe username list 
+    id_list = list(filter(None, id_list))
+    id_list = list(set(id_list))
+    
+    total_items = len(id_list)
+    chunked_list = list(chunks(id_list, 50)) # FB API limits to 50 ids provided
+    total_chunks = len(chunked_list)
+    
+    count = 1
+    results = []
+    
+    # set field list for details
+    field_list = "about,can_checkin,category,category_list,checkins,contact_address,cover,description,display_subtext,displayed_message_response_time,emails,fan_count,featured_video,general_info,hours,is_always_open,is_community_page,is_eligible_for_branded_content,is_permanently_closed,is_unclaimed,is_verified,link,location,mission,name,name_with_location_descriptor,overall_star_rating,parent_page,phone,rating_count,talking_about_count,username,website,verification_status,feed.limit(1){created_time,story,status_type,id,permalink_url}"
+    
+    # first API call to find Facebook IDs for valid page/user URLs
+    graph = facebook.GraphAPI(access_token=settings.facebook_access_token, version='2.7')
+    
+    print('Calling Facebook API for ' + str(total_items) + ' IDs in ' + str(total_chunks) + ' chunks...')
+
+    for chunk in chunked_list:
+        print('Processing chunk ' + str(count) + ' of ' + str(total_chunks))
+        while True:
+            try:
+                print('Calling API for ' + str(len(chunk)) + ' items')
+                a = graph.get_objects(ids=chunk, fields=field_list)
+                for result in a:
+                    results.append(result)
+                count += 1
+                break
+            except facebook.GraphAPIError as e:
+                error_text = str(e)
+                if 'Cannot query users by their username' in error_text:
+                    error_list = error_text[error_text.rindex("(") + 1:error_text.rindex(")")].split(',')
+                    print(str(len(error_list)) + ' username errors found:')
+                    print(error_list)
+                    for error in error_list:
+                        chunk.remove(error)
+                    print(str(len(chunk)) + ' items left in chunk')
+                    continue
+                elif 'Some of the aliases you requested do not exist' in error_text:
+                    error_list = error_text[error_text.rindex(":")+2:].split(',')
+                    print(str(len(error_list)) + ' username errors found:')
+                    print(error_list)
+                    for error in error_list:
+                        chunk.remove(error)
+                    print(str(len(chunk)) + ' items left in chunk')
+                    continue
+                else:
+                    raise
+        
+    total_results = len(results)
+    print('Found information for ' + str(total_results) + ' IDs.') 
+        
+    df = pd.DataFrame(results)
+    
+    return df
+
+def fetchFacebookURLs(url_list):
+    # remove empty strings and de-dupe URL list 
+    url_list = list(filter(None, url_list))
+    url_list = list(set(url_list))
+    
+    total_items = len(url_list)
+    chunked_list = list(chunks(url_list, 50)) # FB API limits to 50 ids provided
+    total_chunks = len(chunked_list)
+    
+    count = 1
+    results = {}
+    
+    # first API call to find Facebook IDs for valid page/user URLs
+    graph = facebook.GraphAPI(access_token=settings.facebook_access_token, version='2.7')
+    
+    print('Calling Facebook API for ' + str(total_items) + ' URLs in ' + str(total_chunks) + ' chunks...')
+
+    for chunk in chunked_list:
+        print('Processing chunk ' + str(count) + ' of ' + str(total_chunks))
+        while True:
+            try:
+                print('Calling API for ' + str(len(chunk)) + ' items')
+                a = graph.get_objects(ids=chunk)
+                results.update(a)
+                count += 1
+                break
+            except facebook.GraphAPIError as e:
+                error_text = str(e)
+                if 'Cannot query users by their username' in error_text:
+                    error_list = error_text[error_text.rindex("(") + 1:error_text.rindex(")")].split(',')
+                    print(str(len(error_list)) + ' username errors found:')
+                    print(error_list)
+                    for error in error_list:
+                        chunk.remove(error)
+                    print(str(len(chunk)) + ' items left in chunk')
+                    continue
+                elif 'Some of the aliases you requested do not exist' in error_text:
+                    error_list = error_text[error_text.rindex(":")+2:].split(',')
+                    print(str(len(error_list)) + ' username errors found:')
+                    print(error_list)
+                    for error in error_list:
+                        chunk.remove(error)
+                    print(str(len(chunk)) + ' items left in chunk')
+                    continue
+                else:
+                    raise
+        
+    total_results = len(results)
+    print('Found information for ' + str(total_results) + ' screen names.') 
+        
+    df = pd.DataFrame.from_dict(results, orient='index')
+    
+    # URL as index will cause issues later; make URL its own column and reindex
+    df.reset_index(inplace=True)
+    
+    return df
+
 #####
 
 # turn off 'SettingWithCopyWarning' error message in pandas
@@ -137,27 +297,37 @@ accts = loadUSDR()  # First time, use:  accts = fetchUSDR()
 
 accts[['created_at','updated_at']] = accts[['created_at','updated_at']].apply(pd.to_datetime)
 
-# filter list of accounts to just Twitter
+# filter list of accounts to respective platforms
 twitter_accts = accts[accts["service_key"] == "twitter"]
+facebook_accts = accts[accts["service_key"] == "facebook"]
 
 # get lowercase screen name from URL
 twitter_accts['screen_name'] = twitter_accts['service_url'].apply(lambda x: getTwitterUsername(x))
+facebook_accts['screen_name'] = facebook_accts['service_url'].apply(lambda x: str(getFacebookUsername(x)))
+
+facebook_accts['clean_url'] = facebook_accts['screen_name'].apply(lambda x: 'https://www.facebook.com/' + x)
 
 #print('Missing \"account\" values: ' + str(twitter_accts['account'].isnull().sum()))
 #print('Missing \"screen_name\" values: ' + str(twitter_accts['screen_name'].isnull().sum()))
 
 # find duplicates/missing fields and save all (including first occurence) to data frame for future checking
 twitter_accts['has_duplicate'] = twitter_accts.duplicated(['screen_name'], keep = False)
+facebook_accts['has_duplicate'] = facebook_accts.duplicated(['screen_name'], keep = False)
+
 dupes = twitter_accts[twitter_accts['has_duplicate'] == True]
+dupes = pd.concat([dupes, facebook_accts[facebook_accts['has_duplicate'] == True]], ignore_index=True)
+
 dupes['error'] = 'screen name is not unique'
 #print('Size of acct_errors: ' + str(dupes.shape))
 
 missing_account_names = twitter_accts[twitter_accts['account'].isnull()]
+missing_account_names = pd.concat([missing_account_names, facebook_accts[facebook_accts['account'].isnull()]], ignore_index=True)
 missing_account_names['error'] = 'missing account field (use screen_name if available)'
 #print('Size of missing_account_names: ' + str(missing_account_names.shape))
 
 missing_screen_names = twitter_accts[twitter_accts['screen_name'].isnull()]
-missing_screen_names['error'] = missing_screen_names['service_url'].apply(lambda x: check_missing_screen_name('twitter', x))
+missing_screen_names = pd.concat([missing_screen_names, facebook_accts[facebook_accts['screen_name'].isnull()]], ignore_index=True)
+missing_screen_names['error'] = missing_screen_names['service_url'].apply(lambda x: check_missing_screen_name(['twitter','facebook'], x))
 #print('Size of missing_screen_names: ' + str(missing_screen_names.shape))
 
 errors = pd.concat([missing_screen_names, missing_account_names, dupes], ignore_index=True)
@@ -169,16 +339,24 @@ errors = pd.concat([missing_screen_names, missing_account_names, dupes], ignore_
 # twitter_accts.sort_values('created_at', ascending = False, inplace = True)
 # twitter_accts['is_duplicated'] = twitter_accts.duplicated(['screen_name'], keep = 'first')
 
-# call Twitter API and get user IDs and other metadata for column of screen names
-username_list = twitter_accts['screen_name'].tolist()
+# call platform APIs and get user IDs and other metadata for column of screen names
+twitter_name_list = twitter_accts['screen_name'].tolist()
+facebook_name_list = facebook_accts['screen_name'].tolist()
 
-twitter_api = loadTwitter()  # First time (or when you want to update), use:  twitter_api = fetchTwitter(username_list)
+facebook_url_list = facebook_accts['clean_url'].tolist()
 
-twitter_api['last_tweeted_at'] = twitter_api['status'].apply(lambda x: getLastTweet(x))
+twitter_api = loadTwitter()  # First time (or when you want to update), use:  twitter_api = fetchTwitter(twitter_name_list). Afterwards, you can use twitter_api = loadTwitter()
 
-twitter_api[['last_tweeted_at', 'created_at']] = twitter_api[['last_tweeted_at', 'created_at']].apply(pd.to_datetime)
+#facebook_api = fetchFacebook(facebook_name_list) # First time (or when you want to update), use:  facebook_api = fetchFacebook(facebook_name_list). Afterwards, you can use facebook_api = loadFacebook()
 
-twitter_api['last_tweeted_category'] = twitter_api['last_tweeted_at'].apply(lambda x: lastTweetedCategory(x))
+facebook_api = fetchFacebook(facebook_url_list)
+
+
+twitter_api['last_posted_at'] = twitter_api['status'].apply(lambda x: getLastTweet(x))
+
+twitter_api[['last_posted_at', 'created_at']] = twitter_api[['last_posted_at', 'created_at']].apply(pd.to_datetime)
+
+twitter_api['last_posted_category'] = twitter_api['last_posted_at'].apply(lambda x: lastPostedCategory(x))
 
 twitter_api['screen_name_capitalized'] = twitter_api['screen_name']
 twitter_api['screen_name'] = twitter_api['screen_name'].apply(lambda x: str.lower(x))
@@ -206,17 +384,20 @@ print("{:<38}".format('Verified users (with checkmark): ') + "{:>6,}".format(ver
 
 print('USER\'S MOST RECENT TWEET BY CATEGORY:')
 
-dayago = (twitter_merged_unique['last_tweeted_category'] == 'within last 24 hours').sum()
+dayago = (twitter_merged_unique['last_posted_category'] == 'within last 24 hours').sum()
 print("{:<38}".format('Less than 24 hours ago:') + "{:>6,}".format(dayago) + " (" + '{:.1%}'.format(dayago/total_twitter_ids) + " of records found using Twitter API)")
 
-weekago = (twitter_merged_unique['last_tweeted_category'] == 'within last week').sum()
+weekago = (twitter_merged_unique['last_posted_category'] == 'within last week').sum()
 print("{:<38}".format('Within the last week: ') + "{:>6,}".format(weekago) + " (" + '{:.1%}'.format(weekago/total_twitter_ids) + ")")
 
-monthago = (twitter_merged_unique['last_tweeted_category'] == 'within last month').sum()
+monthago = (twitter_merged_unique['last_posted_category'] == 'within last month').sum()
 print("{:<38}".format('Within the last month: ') + "{:>6,}".format(monthago) + " (" + '{:.1%}'.format(monthago/total_twitter_ids) + ")")
 
-yearago = (twitter_merged_unique['last_tweeted_category'] == 'within last year').sum()
+yearago = (twitter_merged_unique['last_posted_category'] == 'within last year').sum()
 print("{:<38}".format('Within the last year: ') + "{:>6,}".format(yearago) + " (" + '{:.1%}'.format(yearago/total_twitter_ids) + ")")
 
-morethanayear = (twitter_merged_unique['last_tweeted_category'] == 'more than a year ago').sum()
+morethanayear = (twitter_merged_unique['last_posted_category'] == 'more than a year ago').sum()
 print("{:<38}".format('More than a year ago: ') + "{:>6,}".format(morethanayear) + " (" + '{:.1%}'.format(morethanayear/total_twitter_ids) + ")")
+
+
+
