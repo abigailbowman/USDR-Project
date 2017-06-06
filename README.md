@@ -6,7 +6,7 @@ USDR and its API documentation: https://usdigitalregistry.digitalgov.gov
 Progress:
 - [x] Pull records from USDR API
 - [x] Integrate Twitter API
-- [ ] Integrate Facebook API
+- [ ] Integrate Facebook API (in progress)
 - [ ] Integrate Google API
-- [ ] Create basic analysis report
+- [x] Create basic analysis report
 - [ ] Create more advanced data visualizations
