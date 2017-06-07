@@ -57,7 +57,7 @@ def getTwitterUsername(url):
         username = re.search(regex, url).group(1)
         return username.lower()
     except AttributeError:
-        return float('NaN')
+        return None
 
 # need this for Twitter API calls to UsersLookup
 def chunks(biglist, chunksize):
@@ -86,14 +86,14 @@ def fetchTwitter(username_list):
     print('Calling Twitter API for ' + str(total_items) + ' screen names in ' + str(total_chunks) + ' chunks...')
     
     for chunk in chunked_list:
-        print('Processing chunk ' + str(count) + ' of ' + str(total_chunks))
+        print('\rProcessing chunk ' + str(count) + ' of ' + str(total_chunks) + "  ", end='')
         a = api.UsersLookup(screen_name = chunk)
         for result in a:
             results.append(result.AsDict())
         count += 1
     
     total_results = len(results)
-    print('Found information for ' + str(total_results) + ' screen names.')
+    print('\rFound information for ' + str(total_results) + ' screen names.')
 
     # save results to a json txt file for later reference
     with open('data/Twitter_API_Results.txt', 'w+') as file:
@@ -137,24 +137,42 @@ def getFacebookUsername(url):
         username = str(re.search(regex, url).group(1))
         return username.lower()
     except AttributeError:
-        return float('NaN')
+        return None
 
 def fetchFacebook(url_list):
     df_urls = fetchFacebookURLs(url_list)
     
-#==============================================================================NOT WORKING
-#     notfound = df_urls[df_urls['name'].isnull()]
-#     new_urls = []
-#     with requests.Session() as s:
-#         for old_url in notfound.index.values:
-#             resp = s.head(old_url, allow_redirects=True)
-#             new_urls.append(resp.url)
-#             
-#     df_urls = pd.concat([df_urls, fetchFacebookURLs(new_urls)], ignore_index=True)
-#==============================================================================
+    notfound = df_urls[df_urls['name'].isnull()]
+    notfound_urls = notfound['url'].tolist()
+    total_notfound_urls = len(notfound_urls)
+    
+    new_urls = []
+    count = 1
+    
+    print('Checking redirects for ' + str(total_notfound_urls) + ' URLs...')
+    
+    with requests.Session() as s:
+        for old_url in notfound_urls:
+            print('\rProcessing URL ' + str(count) + ' of ' + str(total_notfound_urls) + "    ", end='')
+            try:
+                resp = s.head(old_url, allow_redirects=True)
+            except:
+                if 'http://' not in old_url:
+                    old_url = 'http://' + old_url
+                if 'facebook.com' not in old_url:
+                    old_url = 'http://www.facebook.com/' + getFacebookUsername(old_url)
+                resp = s.head(old_url, allow_redirects=True)
+            new_urls.append(resp.url)
+            count += 1
+     
+    new_unique_urls = list(set(new_urls) & set(notfound_urls))
+    
+    print('\rFound ' + str(len(new_unique_urls)) + ' new URLs             ')
+    
+    df_urls = pd.concat([df_urls, fetchFacebookURLs(new_unique_urls)], ignore_index=True)
     
     # save results to a json txt file for later reference
-    with open('data/Facebook_API_Results_by_URL.txt', 'w+') as file:
+    with open('data/Facebook_API_Results_by_URL_2.txt', 'w+') as file:
         json.dump(df_urls.to_json(), file)
         
     id_list = df_urls['id'].tolist()
@@ -194,10 +212,9 @@ def fetchFacebookDetails(id_list):
     print('Calling Facebook API for ' + str(total_items) + ' IDs in ' + str(total_chunks) + ' chunks...')
 
     for chunk in chunked_list:
-        print('Processing chunk ' + str(count) + ' of ' + str(total_chunks))
+        print('\rProcessing chunk ' + str(count) + ' of ' + str(total_chunks) + "    ", end='')
         while True:
             try:
-                print('Calling API for ' + str(len(chunk)) + ' items')
                 a = graph.get_objects(ids=chunk, fields=field_list)
                 for result in a:
                     results.append(result)
@@ -225,14 +242,14 @@ def fetchFacebookDetails(id_list):
                     raise
         
     total_results = len(results)
-    print('Found information for ' + str(total_results) + ' IDs.') 
+    print('\rFound information for ' + str(total_results) + ' IDs.') 
         
     df = pd.DataFrame(results)
     
     return df
 
 def fetchFacebookURLs(url_list):
-    # remove empty strings and de-dupe URL list 
+    # remove empty strings, leading/trailing spaces, and de-dupe URL list 
     url_list = list(filter(None, url_list))
     url_list = list(set(url_list))
     
@@ -249,11 +266,17 @@ def fetchFacebookURLs(url_list):
     print('Calling Facebook API for ' + str(total_items) + ' URLs in ' + str(total_chunks) + ' chunks...')
 
     for chunk in chunked_list:
-        print('Processing chunk ' + str(count) + ' of ' + str(total_chunks))
+        print('\rProcessing chunk ' + str(count) + ' of ' + str(total_chunks) + "  ", end='')
         while True:
             try:
-                print('Calling API for ' + str(len(chunk)) + ' items')
                 a = graph.get_objects(ids=chunk)
+                for details in a.values():
+                    if 'name' in details:
+                        details['is_valid'] = True
+                        details['error'] = None
+                    else:
+                        details['is_valid'] = False
+                        details['error'] = 'page is not available'
                 results.update(a)
                 count += 1
                 break
@@ -263,27 +286,40 @@ def fetchFacebookURLs(url_list):
                     error_list = error_text[error_text.rindex("(") + 1:error_text.rindex(")")].split(',')
                     print(str(len(error_list)) + ' username errors found:')
                     print(error_list)
-                    for error in error_list:
-                        chunk.remove(error)
-                    print(str(len(chunk)) + ' items left in chunk')
+                    for error_url in error_list:
+                        chunk.remove(error_url)
+                        error_log = {error_url: {'error':'cannot query user by their username'}}
+                        results.update(error_log)
+                    print('Errors removed. ' + str(len(chunk)) + ' items left in chunk')
                     continue
                 elif 'Some of the aliases you requested do not exist' in error_text:
-                    error_list = error_text[error_text.rindex(":")+2:].split(',')
-                    print(str(len(error_list)) + ' username errors found:')
+                    error_list = error_text[error_text.rindex("exist:")+7:].split(',')
+                    print(str(len(error_list)) + ' alias error found:')
                     print(error_list)
-                    for error in error_list:
-                        chunk.remove(error)
-                    print(str(len(chunk)) + ' items left in chunk')
+                    for error_url in error_list:
+                        try:
+                            chunk.remove(error_url)
+                        except ValueError:
+                            for url in chunk:
+                                if url.strip() == error_url.strip():
+                                    chunk.remove(url)
+                                    break
+                        error_log = {error_url: {'error':'the alias you requested does not exist'}}
+                        results.update(error_log)
+                    print('Errors removed. ' + str(len(chunk)) + ' items left in chunk')
                     continue
                 else:
                     raise
         
-    total_results = len(results)
-    print('Found information for ' + str(total_results) + ' screen names.') 
-        
     df = pd.DataFrame.from_dict(results, orient='index')
     
+    total_results = len(results)
+    valid_results = df['is_valid'].sum()
+    
+    print('\rFound information for ' + str(total_results) + ' URLs. ' + str(valid_results) + ' are valid Facebook pages.') 
+    
     # URL as index will cause issues later; make URL its own column and reindex
+    df.index.name='url'
     df.reset_index(inplace=True)
     
     return df
@@ -305,7 +341,7 @@ facebook_accts = accts[accts["service_key"] == "facebook"]
 twitter_accts['screen_name'] = twitter_accts['service_url'].apply(lambda x: getTwitterUsername(x))
 facebook_accts['screen_name'] = facebook_accts['service_url'].apply(lambda x: str(getFacebookUsername(x)))
 
-facebook_accts['clean_url'] = facebook_accts['screen_name'].apply(lambda x: 'https://www.facebook.com/' + x)
+facebook_accts['url_from_screen_name'] = facebook_accts['screen_name'].apply(lambda x: 'https://www.facebook.com/' + x)
 
 #print('Missing \"account\" values: ' + str(twitter_accts['account'].isnull().sum()))
 #print('Missing \"screen_name\" values: ' + str(twitter_accts['screen_name'].isnull().sum()))
@@ -343,14 +379,16 @@ errors = pd.concat([missing_screen_names, missing_account_names, dupes], ignore_
 twitter_name_list = twitter_accts['screen_name'].tolist()
 facebook_name_list = facebook_accts['screen_name'].tolist()
 
-facebook_url_list = facebook_accts['clean_url'].tolist()
+facebook_url_list_1 = facebook_accts['url_from_screen_name'].tolist()
+facebook_url_list_2 = facebook_accts['service_url'].tolist()
 
-twitter_api = loadTwitter()  # First time (or when you want to update), use:  twitter_api = fetchTwitter(twitter_name_list). Afterwards, you can use twitter_api = loadTwitter()
+# First time (or when you want to update), use:  twitter_api = fetchTwitter(twitter_name_list). Afterwards, you can use twitter_api = loadTwitter()
+twitter_api = loadTwitter()
 
 #facebook_api = fetchFacebook(facebook_name_list) # First time (or when you want to update), use:  facebook_api = fetchFacebook(facebook_name_list). Afterwards, you can use facebook_api = loadFacebook()
 
-facebook_api = fetchFacebook(facebook_url_list)
-
+facebook_api_1 = fetchFacebook(facebook_url_list_1)
+facebook_api_2 = fetchFacebook(facebook_url_list_2)
 
 twitter_api['last_posted_at'] = twitter_api['status'].apply(lambda x: getLastTweet(x))
 
