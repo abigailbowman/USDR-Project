@@ -1,3 +1,5 @@
 requests==2.13.0
+facebook_sdk==2.0.0
 pandas==0.19.2
+facebook==0.0
 python_twitter==3.3
