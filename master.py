@@ -3,6 +3,7 @@ import re
 
 import requests
 import pandas as pd
+import numpy as np
 import twitter   # This is @bear's Python-Twitter wrapper: https://github.com/bear/python-twitter
 from twitter import models
 import facebook  # This is @mobolic's Facebook-SDK wrapper: https://github.com/mobolic/facebook-sdk
@@ -111,11 +112,17 @@ def loadTwitter():
     
     return df
 
-def getLastTweet(tweet_obj):
+def getLastTweet(tweet_dict):
     try:
-        return tweet_obj['created_at']
+        return tweet_dict['created_at']
     except TypeError:
-        return float('NaN')
+        return None
+
+def getLastFacebookPost(feed_dict):
+    try:
+        return feed_dict['data'][0]['created_time']
+    except TypeError:
+        return None    
 
 def lastPostedCategory(datetime_obj):
     diff = pd.datetime.now() - datetime_obj
@@ -135,7 +142,9 @@ def getFacebookUsername(url):
     regex = r"(?:https?:\/\/)?(?:www\.)?[fF]acebook\.com\/(?:.+\/)*([\w\.\-]+)"  # thanks to @marcgg and @nkanaev on GitHub thread: https://gist.github.com/marcgg/733592
     try:
         username = str(re.search(regex, url).group(1))
-        return username.lower()
+        if username == str:
+            return username.lower()
+        else: return username
     except AttributeError:
         return None
 
@@ -144,6 +153,9 @@ def fetchFacebook(url_list):
     
     notfound = df_urls[df_urls['name'].isnull()]
     notfound_urls = notfound['url'].tolist()
+    
+    notfound_urls = list(filter(None, notfound_urls))
+    notfound_urls = list(set(notfound_urls))
     total_notfound_urls = len(notfound_urls)
     
     new_urls = []
@@ -154,14 +166,19 @@ def fetchFacebook(url_list):
     with requests.Session() as s:
         for old_url in notfound_urls:
             print('\rProcessing URL ' + str(count) + ' of ' + str(total_notfound_urls) + "    ", end='')
+            if old_url == None:
+                continue
             try:
                 resp = s.head(old_url, allow_redirects=True)
             except:
-                if 'http://' not in old_url:
+                if 'http' not in old_url:
                     old_url = 'http://' + old_url
-                if 'facebook.com' not in old_url:
-                    old_url = 'http://www.facebook.com/' + getFacebookUsername(old_url)
-                resp = s.head(old_url, allow_redirects=True)
+                if ('facebook.com' not in old_url and getFacebookUsername(old_url) != None):
+                    old_url = 'http://www.facebook.com/' + str(getFacebookUsername(old_url))
+                try:
+                    resp = s.head(old_url, allow_redirects=True)
+                except:
+                    continue
             new_urls.append(resp.url)
             count += 1
      
@@ -172,22 +189,18 @@ def fetchFacebook(url_list):
     df_urls = pd.concat([df_urls, fetchFacebookURLs(new_unique_urls)], ignore_index=True)
     
     # save results to a json txt file for later reference
-    with open('data/Facebook_API_Results_by_URL_2.txt', 'w+') as file:
+    with open('data/Facebook_API_Results_by_URL.txt', 'w+') as file:
         json.dump(df_urls.to_json(), file)
         
-    id_list = df_urls['id'].tolist()
+    id_list = df_urls[df_urls['error'].isnull()]['id'].tolist()
     
-#==============================================================================NOT WORKING
-#     df_ids = fetchFacebookDetails(id_list)  ## NOT WORKING
-#     
-#     # save results to a json txt file for later reference
-#     with open('data/Facebook_API_Results_by_ID.txt', 'w+') as file:
-#         json.dump(df_ids.to_json(), file)
-#     
-#     df_merged = pd.merge(df_urls, df_ids, how='outer', on='id', left_index=False, right_index=False, sort=True, suffixes=('_url', '_id'), copy=False, indicator=False)
-#==============================================================================
+    df_ids = fetchFacebookDetails(id_list)
     
-    df_merged = df_urls
+    # save results to a json txt file for later reference
+    with open('data/Facebook_API_Results_by_ID.txt', 'w+') as file:
+        json.dump(df_ids.to_json(), file)
+    
+    df_merged = pd.merge(df_urls, df_ids, how='outer', on='id', left_index=False, right_index=False, sort=True, suffixes=('_url', '_id'), copy=False, indicator=False)
 
     return df_merged
 
@@ -201,7 +214,7 @@ def fetchFacebookDetails(id_list):
     total_chunks = len(chunked_list)
     
     count = 1
-    results = []
+    results = {}
     
     # set field list for details
     field_list = "about,can_checkin,category,category_list,checkins,contact_address,cover,description,display_subtext,displayed_message_response_time,emails,fan_count,featured_video,general_info,hours,is_always_open,is_community_page,is_eligible_for_branded_content,is_permanently_closed,is_unclaimed,is_verified,link,location,mission,name,name_with_location_descriptor,overall_star_rating,parent_page,phone,rating_count,talking_about_count,username,website,verification_status,feed.limit(1){created_time,story,status_type,id,permalink_url}"
@@ -216,8 +229,7 @@ def fetchFacebookDetails(id_list):
         while True:
             try:
                 a = graph.get_objects(ids=chunk, fields=field_list)
-                for result in a:
-                    results.append(result)
+                results.update(a)
                 count += 1
                 break
             except facebook.GraphAPIError as e:
@@ -240,11 +252,12 @@ def fetchFacebookDetails(id_list):
                     continue
                 else:
                     raise
-        
+    
+    df = pd.DataFrame.from_dict(results, orient='index')
+    
     total_results = len(results)
+    
     print('\rFound information for ' + str(total_results) + ' IDs.') 
-        
-    df = pd.DataFrame(results)
     
     return df
 
@@ -340,6 +353,7 @@ facebook_accts = accts[accts["service_key"] == "facebook"]
 # get lowercase screen name from URL
 twitter_accts['screen_name'] = twitter_accts['service_url'].apply(lambda x: getTwitterUsername(x))
 facebook_accts['screen_name'] = facebook_accts['service_url'].apply(lambda x: str(getFacebookUsername(x)))
+facebook_accts['screen_name_type'] = facebook_accts['screen_name'].apply(lambda x: str(type(x)))
 
 facebook_accts['url_from_screen_name'] = facebook_accts['screen_name'].apply(lambda x: 'https://www.facebook.com/' + x)
 
@@ -379,22 +393,21 @@ errors = pd.concat([missing_screen_names, missing_account_names, dupes], ignore_
 twitter_name_list = twitter_accts['screen_name'].tolist()
 facebook_name_list = facebook_accts['screen_name'].tolist()
 
-facebook_url_list_1 = facebook_accts['url_from_screen_name'].tolist()
-facebook_url_list_2 = facebook_accts['service_url'].tolist()
+facebook_url_list = facebook_accts['url_from_screen_name'].tolist()
 
 # First time (or when you want to update), use:  twitter_api = fetchTwitter(twitter_name_list). Afterwards, you can use twitter_api = loadTwitter()
 twitter_api = loadTwitter()
 
 #facebook_api = fetchFacebook(facebook_name_list) # First time (or when you want to update), use:  facebook_api = fetchFacebook(facebook_name_list). Afterwards, you can use facebook_api = loadFacebook()
 
-facebook_api_1 = fetchFacebook(facebook_url_list_1)
-facebook_api_2 = fetchFacebook(facebook_url_list_2)
+facebook_api = fetchFacebook(facebook_url_list)
 
 twitter_api['last_posted_at'] = twitter_api['status'].apply(lambda x: getLastTweet(x))
-
 twitter_api[['last_posted_at', 'created_at']] = twitter_api[['last_posted_at', 'created_at']].apply(pd.to_datetime)
+facebook_api['last_posted_at'] = facebook_api['feed'].apply(lambda x: getLastFacebookPost(x)).apply(pd.to_datetime)
 
 twitter_api['last_posted_category'] = twitter_api['last_posted_at'].apply(lambda x: lastPostedCategory(x))
+facebook_api['last_posted_category'] = facebook_api['last_posted_at'].apply(lambda x: lastPostedCategory(x))
 
 twitter_api['screen_name_capitalized'] = twitter_api['screen_name']
 twitter_api['screen_name'] = twitter_api['screen_name'].apply(lambda x: str.lower(x))
@@ -402,20 +415,42 @@ twitter_api['screen_name'] = twitter_api['screen_name'].apply(lambda x: str.lowe
 # Merge the two datasets on the lower-case screen name field
 twitter_merged = pd.merge(twitter_accts, twitter_api, how='outer', on=None, left_on='screen_name', right_on='screen_name', left_index=False, right_index=False, sort=True, suffixes=('_usdr', '_api'), copy=False, indicator=False)
 
-# run stats on results
-total_usdr_records = twitter_merged['id_usdr'].nunique()
-print("{:<38}".format('Total USDR Twitter records: ') + "{:>6,}".format(total_usdr_records))
+facebook_merged = pd.merge(facebook_accts, facebook_api, how='outer', on=None, left_on='url_from_screen_name', right_on='url', left_index=False, right_index=False, sort=True, suffixes=('_usdr', '_api'), copy=False, indicator=False)
 
-total_screen_names = twitter_merged['screen_name'].nunique()
-print("{:<38}".format('Unique Twitter usernames: ') + "{:>6,}".format(total_screen_names) + " (" + '{:.1%}'.format(total_screen_names/total_usdr_records) + " of total USDR Twitter records)")
+def print3col(a,b,c,d=''):   # assumes a is text, b and c are ints, and d is a percent, unless otherwise (in which case they're all strings)
+    try:
+        if (b <= 1 and c <=1):
+            print('{0:<30} {1:>10.1%} {2:>10.1%} {3}'.format(a,b,c,d))
+        else:
+            print('{0:<30} {1:>10,} {2:>10,} {3}'.format(a,b,c,d))
+    except:
+        print('{0:<30} {1:>10} {2:>10} {3}'.format(a,b,c,d))
+
+# run stats on results
+print3col('','TWITTER','FACEBOOK')
+
+total_usdr_records_twitter = twitter_merged['id_usdr'].nunique()
+total_usdr_records_facebook = facebook_merged['id_usdr'].nunique()
+print3col('Total USDR records:',total_usdr_records_twitter,total_usdr_records_facebook)
+
+total_screen_names_twitter = twitter_merged['screen_name'].nunique()
+total_screen_names_facebook = facebook_merged['screen_name'].nunique()
+print3col('Unique usernames:',total_screen_names_twitter,total_screen_names_facebook)
 
 total_twitter_ids = twitter_merged['id_api'].nunique()
-print("{:<38}".format('User records found using Twitter API: ') + "{:>6,}".format(total_twitter_ids) + " (" + '{:.1%}'.format(total_twitter_ids/total_screen_names) + " of unique Twitter screen names)")
+total_facebook_ids = facebook_merged[facebook_merged['is_valid'] == True]['id_api'].nunique()
+print3col('Records found using APIs:',total_twitter_ids,total_facebook_ids)
+print3col('   % of unique screen names:',total_twitter_ids/total_screen_names_twitter,total_facebook_ids/total_screen_names_facebook)
 
 # create dataframe of only the USDR entries with API results; only keep most recent entry if duplicate
 twitter_merged_unique = twitter_merged.sort_values('created_at_usdr', ascending = False)
 twitter_merged_unique.dropna(subset=['id_api'], inplace = True)
 twitter_merged_unique.drop_duplicates(subset=['id_api'], keep = 'first', inplace = True)
+
+facebook_merged_unique = facebook_merged.sort_values('created_at', ascending = False)
+#facebook_merged_unique.dropna(subset=['id_api'], inplace = True)
+#facebook_merged_unique.drop_duplicates(subset=['id_api'], keep = 'first', inplace = True)
+## TODO
 
 verified_accts = twitter_merged_unique['verified'].sum()
 print("{:<38}".format('Verified users (with checkmark): ') + "{:>6,}".format(verified_accts) + " (" + '{:.1%}'.format(verified_accts/total_twitter_ids) + " of records found using Twitter API)\n")
