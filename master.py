@@ -3,9 +3,7 @@ import re
 
 import requests
 import pandas as pd
-import numpy as np
 import twitter   # This is @bear's Python-Twitter wrapper: https://github.com/bear/python-twitter
-from twitter import models
 import facebook  # This is @mobolic's Facebook-SDK wrapper: https://github.com/mobolic/facebook-sdk
 
 import settings  # Be sure to add your platform API consumer keys/secrets to settings.py or this won't work
@@ -102,6 +100,8 @@ def fetchTwitter(username_list):
         
     df = pd.DataFrame(results)
     
+    df['last_api_call'] = pd.datetime.now()
+    
     return df
 
 def loadTwitter():
@@ -124,15 +124,14 @@ def getLastFacebookPost(feed_dict):
     except TypeError:
         return None    
 
-def lastPostedCategory(datetime_obj):
-    diff = pd.datetime.now() - datetime_obj
-    if diff < pd.Timedelta('24 hours'):
+def lastPostedCategory(datetime_difference):
+    if datetime_difference < pd.Timedelta('24 hours'):
         return 'within last 24 hours'
-    elif diff < pd.Timedelta('7 days'):
+    elif datetime_difference < pd.Timedelta('7 days'):
         return 'within last week'
-    elif diff < pd.Timedelta('30 days'):
+    elif datetime_difference < pd.Timedelta('30 days'):
         return 'within last month'
-    elif diff < pd.Timedelta('365 days'):
+    elif datetime_difference < pd.Timedelta('365 days'):
         return 'within last year'
     else:
         return 'more than a year ago'
@@ -201,6 +200,8 @@ def fetchFacebook(url_list):
         json.dump(df_ids.to_json(), file)
     
     df_merged = pd.merge(df_urls, df_ids, how='outer', on='id', left_index=False, right_index=False, sort=True, suffixes=('_url', '_id'), copy=False, indicator=False)
+    
+    df_merged['last_api_call'] = pd.datetime.now()
 
     return df_merged
 
@@ -342,7 +343,7 @@ def fetchFacebookURLs(url_list):
 # turn off 'SettingWithCopyWarning' error message in pandas
 pd.options.mode.chained_assignment = None  # default='warn'
 
-accts = loadUSDR()  # First time, use:  accts = fetchUSDR()
+accts = fetchUSDR()  # First time, use:  accts = fetchUSDR(); after, can use accts = loadUSDR()
 
 accts[['created_at','updated_at']] = accts[['created_at','updated_at']].apply(pd.to_datetime)
 
@@ -396,7 +397,7 @@ facebook_name_list = facebook_accts['screen_name'].tolist()
 facebook_url_list = facebook_accts['url_from_screen_name'].tolist()
 
 # First time (or when you want to update), use:  twitter_api = fetchTwitter(twitter_name_list). Afterwards, you can use twitter_api = loadTwitter()
-twitter_api = loadTwitter()
+twitter_api = fetchTwitter(twitter_name_list)
 
 #facebook_api = fetchFacebook(facebook_name_list) # First time (or when you want to update), use:  facebook_api = fetchFacebook(facebook_name_list). Afterwards, you can use facebook_api = loadFacebook()
 
@@ -406,8 +407,11 @@ twitter_api['last_posted_at'] = twitter_api['status'].apply(lambda x: getLastTwe
 twitter_api[['last_posted_at', 'created_at']] = twitter_api[['last_posted_at', 'created_at']].apply(pd.to_datetime)
 facebook_api['last_posted_at'] = facebook_api['feed'].apply(lambda x: getLastFacebookPost(x)).apply(pd.to_datetime)
 
-twitter_api['last_posted_category'] = twitter_api['last_posted_at'].apply(lambda x: lastPostedCategory(x))
-facebook_api['last_posted_category'] = facebook_api['last_posted_at'].apply(lambda x: lastPostedCategory(x))
+twitter_api['last_posted_category'] = twitter_api['last_api_call'] - twitter_api['last_posted_at']
+twitter_api['last_posted_category'] = twitter_api['last_posted_category'].apply(lambda x: lastPostedCategory(x))
+
+facebook_api['last_posted_category'] = facebook_api['last_api_call'] - facebook_api['last_posted_at']
+facebook_api['last_posted_category'] = facebook_api['last_posted_category'].apply(lambda x: lastPostedCategory(x))
 
 twitter_api['screen_name_capitalized'] = twitter_api['screen_name']
 twitter_api['screen_name'] = twitter_api['screen_name'].apply(lambda x: str.lower(x))
@@ -419,7 +423,7 @@ facebook_merged = pd.merge(facebook_accts, facebook_api, how='outer', on=None, l
 
 def print3col(a,b,c,d=''):   # assumes a is text, b and c are ints, and d is a percent, unless otherwise (in which case they're all strings)
     try:
-        if (b <= 1 and c <=1):
+        if (0 < b <= 1 and 0 < c <=1):
             print('{0:<30} {1:>10.1%} {2:>10.1%} {3}'.format(a,b,c,d))
         else:
             print('{0:<30} {1:>10,} {2:>10,} {3}'.format(a,b,c,d))
@@ -439,7 +443,7 @@ print3col('Unique usernames:',total_screen_names_twitter,total_screen_names_face
 
 total_twitter_ids = twitter_merged['id_api'].nunique()
 total_facebook_ids = facebook_merged[facebook_merged['is_valid'] == True]['id_api'].nunique()
-print3col('Records found using APIs:',total_twitter_ids,total_facebook_ids)
+print3col('Accounts found using APIs:',total_twitter_ids,total_facebook_ids)
 print3col('   % of unique screen names:',total_twitter_ids/total_screen_names_twitter,total_facebook_ids/total_screen_names_facebook)
 
 # create dataframe of only the USDR entries with API results; only keep most recent entry if duplicate
@@ -448,29 +452,37 @@ twitter_merged_unique.dropna(subset=['id_api'], inplace = True)
 twitter_merged_unique.drop_duplicates(subset=['id_api'], keep = 'first', inplace = True)
 
 facebook_merged_unique = facebook_merged.sort_values('created_at', ascending = False)
-#facebook_merged_unique.dropna(subset=['id_api'], inplace = True)
-#facebook_merged_unique.drop_duplicates(subset=['id_api'], keep = 'first', inplace = True)
-## TODO
+facebook_merged_unique.dropna(subset=['id_api'], inplace = True)
+facebook_merged_unique.drop_duplicates(subset=['id_api'], keep = 'first', inplace = True)
 
-verified_accts = twitter_merged_unique['verified'].sum()
-print("{:<38}".format('Verified users (with checkmark): ') + "{:>6,}".format(verified_accts) + " (" + '{:.1%}'.format(verified_accts/total_twitter_ids) + " of records found using Twitter API)\n")
+verified_twitter = twitter_merged_unique['verified'].sum()
+verified_facebook = facebook_merged_unique['is_verified'].sum()
+print3col('Verified (with checkmark): ',verified_twitter,verified_facebook)
+print3col('   % of accounts found in API:',verified_twitter/total_twitter_ids,verified_facebook/total_facebook_ids)
 
-print('USER\'S MOST RECENT TWEET BY CATEGORY:')
+print3col('MOST RECENT POST BY CATEGORY','TWITTER','FACEBOOK')
 
-dayago = (twitter_merged_unique['last_posted_category'] == 'within last 24 hours').sum()
-print("{:<38}".format('Less than 24 hours ago:') + "{:>6,}".format(dayago) + " (" + '{:.1%}'.format(dayago/total_twitter_ids) + " of records found using Twitter API)")
+dayago_twitter = (twitter_merged_unique['last_posted_category'] == 'within last 24 hours').sum()
+dayago_facebook = (facebook_merged_unique['last_posted_category'] == 'within last 24 hours').sum()
+print3col('Less than 24 hours ago:',dayago_twitter,dayago_facebook)
+print3col('   % of accounts found in API:',dayago_twitter,dayago_facebook)
 
-weekago = (twitter_merged_unique['last_posted_category'] == 'within last week').sum()
-print("{:<38}".format('Within the last week: ') + "{:>6,}".format(weekago) + " (" + '{:.1%}'.format(weekago/total_twitter_ids) + ")")
+weekago_twitter = (twitter_merged_unique['last_posted_category'] == 'within last week').sum()
+weekago_facebook = (facebook_merged_unique['last_posted_category'] == 'within last week').sum()
+print3col('Within the last week:',weekago_twitter,weekago_facebook)
 
-monthago = (twitter_merged_unique['last_posted_category'] == 'within last month').sum()
-print("{:<38}".format('Within the last month: ') + "{:>6,}".format(monthago) + " (" + '{:.1%}'.format(monthago/total_twitter_ids) + ")")
+monthago_twitter = (twitter_merged_unique['last_posted_category'] == 'within last month').sum()
+monthago_facebook = (facebook_merged_unique['last_posted_category'] == 'within last month').sum()
+print3col('Within the last month:',monthago_twitter,monthago_facebook)
 
-yearago = (twitter_merged_unique['last_posted_category'] == 'within last year').sum()
-print("{:<38}".format('Within the last year: ') + "{:>6,}".format(yearago) + " (" + '{:.1%}'.format(yearago/total_twitter_ids) + ")")
+yearago_twitter = (twitter_merged_unique['last_posted_category'] == 'within last year').sum()
+yearago_facebook = (facebook_merged_unique['last_posted_category'] == 'within last year').sum()
+print3col('Within the last year:',yearago_twitter,yearago_facebook)
 
-morethanayear = (twitter_merged_unique['last_posted_category'] == 'more than a year ago').sum()
-print("{:<38}".format('More than a year ago: ') + "{:>6,}".format(morethanayear) + " (" + '{:.1%}'.format(morethanayear/total_twitter_ids) + ")")
+morethanayear_twitter = (twitter_merged_unique['last_posted_category'] == 'more than a year ago').sum()
+morethanayear_facebook = (facebook_merged_unique['last_posted_category'] == 'more than a year ago').sum()
+print3col('More than a year ago:',morethanayear_twitter,morethanayear_facebook)
+
 
 
 
