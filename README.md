@@ -4,6 +4,7 @@ Project to enhance and analyze data from the U.S. Digital Registry (USDR) using 
 **USDR and its API documentation:** https://usdigitalregistry.digitalgov.gov
 
 **Progress:**
+
 - [x] Pull records from USDR API
 - [x] Integrate Twitter API
 - [x] Integrate Facebook API
@@ -12,11 +13,13 @@ Project to enhance and analyze data from the U.S. Digital Registry (USDR) using 
 - [ ] Create interactive dashboard app
 
 **Installation and Use:**
+
 1. Rename `settings_example.py` to `settings.py` and add your own platform API keys
 2. Use the Python module: `import usdr`
 3. Run the dashboard app: `$ python app.py`
 
 **Main Functions:**
+
 `usdr.fetchUSDR()` - fetch U.S. Digital Registry social media records, save locally as a .json, and return as a Pandas dataframe
 `usdr.loadUSDR()` - load previously saved USDR .json record as a dataframe
 
