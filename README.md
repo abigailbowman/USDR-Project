@@ -1,12 +1,12 @@
 # USDR-Project
 Project to enhance and analyze data from the U.S. Digital Registry using platform APIs.
 
-USDR and its API documentation: https://usdigitalregistry.digitalgov.gov
+**USDR and its API documentation:** https://usdigitalregistry.digitalgov.gov
 
-Progress:
+**Progress:**
 - [x] Pull records from USDR API
 - [x] Integrate Twitter API
-- [ ] Integrate Facebook API (in progress)
-- [ ] Integrate Google API
+- [x] Integrate Facebook API
+- [ ] Integrate Google API for YouTube
 - [x] Create basic analysis report
-- [ ] Create more advanced data visualizations
+- [ ] Create interactive dashboard app
