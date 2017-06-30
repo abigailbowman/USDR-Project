@@ -30,4 +30,5 @@ Project to enhance and analyze data from the U.S. Digital Registry (USDR) using 
 `usdr.loadFacebook()` - load previously saved Facebook .json record as a dataframe 
 
 **Helper Functions:**
+
 `usdr.get_username(url)` - determines platform and uses regex to parse a username from a URL if possible
