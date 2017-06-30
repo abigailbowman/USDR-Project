@@ -1,5 +1,14 @@
+# Data import and cleanup
 requests==2.13.0
 facebook_sdk==2.0.0
 pandas==0.19.2
 facebook==0.0
 python_twitter==3.3
+facebook-sdk=2.0.0
+
+# Dashboard app
+dash==0.17.7  # The core dash backend
+dash-renderer==0.7.3  # The dash front-end
+dash-html-components==0.6.2  # HTML components
+dash-core-components==0.5.1  # Supercharged components
+plotly==2.0.11  # Plotly graphing library used in examples
