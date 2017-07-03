@@ -15,8 +15,8 @@ Project to enhance and analyze data from the U.S. Digital Registry (USDR) using 
 **Installation and Use:**
 
 1. Rename `settings_example.py` to `settings.py` and add your own platform API keys
-2. Use the Python module: `import usdr`
-3. Run the dashboard app: `$ python app.py`
+2. Use the Python module to pull and analyze data: `import usdr`
+3. Run the dashboard app (not working yet): `$ python app.py`
 
 **Main Functions:**
 
